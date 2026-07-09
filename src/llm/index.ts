@@ -1,4 +1,4 @@
-// LLM 工厂:有 key 用真模型,没 key 自动落回 Mock(断网开发/demo 兜底)
+﻿// LLM 工厂:有 key 用真模型,没 key 自动落回 Mock(断网开发/demo 兜底)
 // 配了备用通道时:主通道(限流/故障)失败自动降级备用,再失败才轮到 mock
 import type { LLMClient } from './client';
 import { FailoverClient } from './failover';
@@ -10,8 +10,8 @@ const env: Record<string, string | undefined> =
   ((globalThis as Record<string, unknown>).__LLM_ENV__ as Record<string, string>) ||
   {};
 
-const baseUrl = env.VITE_LLM_BASE_URL;
-const apiKey = env.VITE_LLM_API_KEY;
+const baseUrl = env.VITE_LLM_BASE_URL || '/api/llm';
+const apiKey = env.VITE_LLM_API_KEY || (baseUrl.startsWith('/api/') ? 'server-proxy' : undefined);
 // 备用通道(可选):主通道失败时自动降级
 const fbBaseUrl = env.VITE_LLM_FALLBACK_BASE_URL;
 const fbApiKey = env.VITE_LLM_FALLBACK_API_KEY;
@@ -45,3 +45,5 @@ export const interpreterLLM = make(env.VITE_MODEL_INTERPRETER, DEFAULT_MODEL, 0.
 export const expertLLM = make(env.VITE_MODEL_EXPERT, DEFAULT_MODEL, 0.5);
 export const evaluatorLLM = make(env.VITE_MODEL_EVALUATOR, DEFAULT_MODEL, 0.3);
 export const caseGeneratorLLM = make(env.VITE_MODEL_CASE_GENERATOR, DEFAULT_MODEL, 0.55);
+
+

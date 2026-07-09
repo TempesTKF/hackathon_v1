@@ -84,6 +84,53 @@ const CASE_DIFFICULTIES: { key: CaseDifficulty; label: string; desc: string }[] 
 ];
 
 let msgSeq = 0;
+interface ScoreStats {
+  games: number;
+  totalScore: number;
+}
+
+const SCORE_STATS_KEY = 'today-who-unwell-score-stats';
+
+function loadScoreStats(): ScoreStats {
+  if (typeof window === 'undefined') return { games: 0, totalScore: 0 };
+  try {
+    const raw = window.localStorage.getItem(SCORE_STATS_KEY);
+    if (!raw) return { games: 0, totalScore: 0 };
+    const parsed = JSON.parse(raw) as Partial<ScoreStats>;
+    return {
+      games: Math.max(0, Number(parsed.games) || 0),
+      totalScore: Math.max(0, Number(parsed.totalScore) || 0),
+    };
+  } catch {
+    return { games: 0, totalScore: 0 };
+  }
+}
+
+function saveScoreStats(stats: ScoreStats) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(SCORE_STATS_KEY, JSON.stringify(stats));
+}
+
+function scoreToStars(score: number) {
+  return Math.max(0, Math.min(5, Math.round((score / 20) * 2) / 2));
+}
+
+function StarRating({ value }: { value: number }) {
+  return (
+    <div className="star-rating" aria-label={`${value.toFixed(1)} 星`}>
+      {[0, 1, 2, 3, 4].map((i) => {
+        const fill = Math.max(0, Math.min(1, value - i));
+        return (
+          <span key={i} className="star-wrap">
+            <span className="star-empty">★</span>
+            <span className="star-fill" style={{ width: `${fill * 100}%` }}>★</span>
+          </span>
+        );
+      })}
+      <b>{value.toFixed(1)}</b>
+    </div>
+  );
+}
 
 export default function App() {
   const [cs, setCs] = useState<CaseCard>(CASES[0].card);
@@ -113,6 +160,8 @@ export default function App() {
   const [evalResult, setEvalResult] = useState<Evaluation | null>(null);
   const [muted, setMuted] = useState(false);
   const [musicOn, setMusicOn] = useState(true);
+  const [startEntered, setStartEntered] = useState(false);
+  const [scoreStats, setScoreStats] = useState<ScoreStats>(() => loadScoreStats());
   const [use3d, setUse3d] = useState(false); // 渲染层开关:默认 2D(比赛版),3D 实验版可切
   const [startMode, setStartMode] = useState<StartMode>('builtin');
   const [genDifficulty, setGenDifficulty] = useState<CaseDifficulty>('advanced');
@@ -149,6 +198,7 @@ export default function App() {
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locRef = useRef<'stool' | 'bed'>('stool');
   const endingTurnRef = useRef(false);
+  const scoreRecordedRef = useRef<string | null>(null);
 
   useEffect(() => {
     sfx.muted = muted;
@@ -162,13 +212,21 @@ export default function App() {
 
   useEffect(() => {
     bgm.muted = !musicOn;
-    if (!musicOn || !game || ended || game.phase === 'dead' || game.phase === 'cured') {
+    if (!musicOn) {
+      bgm.stop();
+      return;
+    }
+    if (!game) {
+      bgm.play('menu');
+      return;
+    }
+    if (ended || game.phase === 'dead' || game.phase === 'cured') {
       bgm.stop();
       return;
     }
     const redHp = game.hp / game.hpMax <= 0.3;
     bgm.play(game.phase === 'critical' || redHp ? 'critical' : 'normal');
-  }, [musicOn, game?.phase, game?.hp, game?.hpMax, ended]);
+  }, [musicOn, game, game?.phase, game?.hp, game?.hpMax, ended]);
   useEffect(() => {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages, drawer]);
@@ -241,6 +299,7 @@ export default function App() {
   };
 
   const startGame = async (card: CaseCard) => {
+    scoreRecordedRef.current = null;
     sfx.unlock();
     bgm.unlock();
     sfx.alarmOff();
@@ -700,6 +759,30 @@ export default function App() {
     };
   }, [ended, evalResult]);
 
+
+  useEffect(() => {
+    if (!ended || !evalResult) return;
+    const key = `standard:${ended}:${evalResult.score}:${gameRef.current?.turn ?? 0}`;
+    if (scoreRecordedRef.current === key) return;
+    scoreRecordedRef.current = key;
+    setScoreStats((prev) => {
+      const next = { games: prev.games + 1, totalScore: prev.totalScore + evalResult.score };
+      saveScoreStats(next);
+      return next;
+    });
+  }, [ended, evalResult]);
+
+  useEffect(() => {
+    if (!identEnded || !identReview) return;
+    const key = `ident:${identEnded}:${identReview.score}:${gameRef.current?.turn ?? 0}`;
+    if (scoreRecordedRef.current === key) return;
+    scoreRecordedRef.current = key;
+    setScoreStats((prev) => {
+      const next = { games: prev.games + 1, totalScore: prev.totalScore + identReview.score };
+      saveScoreStats(next);
+      return next;
+    });
+  }, [identEnded, identReview]);
   // ===== 场景弹层的提交通道:提交即关弹层,后续反馈以场景气泡出现 =====
   const openPop = (p: 'talk' | 'orders' | 'cabinet' | 'surgery') => {
     setCmdInput('');
@@ -740,18 +823,102 @@ export default function App() {
 
   if (!game) {
     const generatingAny = generatingCase || generatingCustomCase || generatingIdent;
+    const avgScore = scoreStats.games > 0 ? scoreStats.totalScore / scoreStats.games : 0;
+    const avgStars = scoreToStars(avgScore);
+
+    if (!startEntered) {
+      return (
+        <div className="title-screen">
+          <div className="title-sunburst" aria-hidden="true" />
+          <div className="title-arc" aria-label="今天谁不舒服">
+            {'今天谁不舒服'.split('').map((ch, i, arr) => {
+              const mid = (arr.length - 1) / 2;
+              const offset = i - mid;
+              return (
+                <span
+                  key={`${ch}-${i}`}
+                  style={{
+                    '--i': i,
+                    '--x': `${offset * 0.68}em`,
+                    '--y': `${Math.abs(offset) * 0.28}em`,
+                    '--rot': `${offset * 8}deg`,
+                  } as React.CSSProperties}
+                >
+                  {ch}
+                </span>
+              );
+            })}
+          </div>
+          <div className="title-tagline">卡通医院里的高自由度 AI 接诊冒险</div>
+          <button className="title-start" onClick={() => { bgm.unlock(); bgm.play('menu'); setStartEntered(true); }}>
+            开始游戏
+          </button>
+          <div className="title-patients" aria-hidden="true">
+            <span className="toon-patient fever" />
+            <span className="toon-patient dizzy" />
+            <span className="toon-patient sniffle" />
+            <span className="toon-patient grumpy" />
+          </div>
+        </div>
+      );
+    }
+
     return (
-      <div className="start-screen">
-        <h1>诊断模拟器</h1>
-        <p className="sub">状态机管数值 · LLM 管表演({llmEnabled ? '真实 LLM 模式' : 'Mock 剧本模式'})</p>
-        <div className="case-brief start-panel">
-          <div className="start-title">急诊呼叫</div>
-          <div className="start-tabs">
+      <div className="start-screen mode-screen">
+        <div className="mode-top-grid">
+          <section className="doctor-id-card">
+            <div className="id-pin" />
+            <div className="doctor-avatar" aria-hidden="true">
+              <div className="doctor-face">
+                <span className="doc-cap" />
+                <span className="doc-head" />
+                <span className="doc-hair" />
+                <span className="doc-body" />
+              </div>
+            </div>
+            <div className="id-copy">
+              <span>主治医生工卡</span>
+              <b>玩家医生</b>
+              <small>已接诊 {scoreStats.games} 局</small>
+            </div>
+            <div className="id-rating">
+              <StarRating value={avgStars} />
+              <small>{scoreStats.games ? `平均 ${Math.round(avgScore)} 分` : '完成一局后生成评级'}</small>
+            </div>
+          </section>
+
+          <section className="mode-title-card">
+            <button className="back-title" onClick={() => setStartEntered(false)}>返回标题</button>
+            <div className="mode-kicker">Today Who Feels Off?</div>
+            <h1>今天谁不舒服</h1>
+            <p>选择接诊方式，和 AI 患者自由对话、检查、开药、手术，别被隐藏患者骗过。</p>
+            <div className="start-badges">
+              <span className="start-badge">温馨卡通</span>
+              <span className="start-badge">AI 患者</span>
+            </div>
+          </section>
+
+          <section className="patient-portraits">
+            <div className="portrait-title">今日候诊</div>
+            <div className="portrait-grid" aria-hidden="true">
+              <span className="mini-patient bandage" />
+              <span className="mini-patient nausea" />
+              <span className="mini-patient mask" />
+              <span className="mini-patient student" />
+              <span className="mini-patient elder" />
+              <span className="mini-patient mystery" />
+            </div>
+            <small>有人真病了，也有人没那么简单。</small>
+          </section>
+        </div>
+
+        <main className="mode-board">
+          <div className="start-tabs mode-tabs">
             <button className={`start-tab ${startMode === 'builtin' ? 'on' : ''}`} onClick={() => setStartMode('builtin')}>
-              预设病例
+              标准病例
             </button>
             <button className={`start-tab ${startMode === 'generated' ? 'on' : ''}`} onClick={() => setStartMode('generated')}>
-              AI 生成
+              随机患者
             </button>
             <button className={`start-tab ${startMode === 'custom' ? 'on' : ''}`} onClick={() => setStartMode('custom')}>
               自定义患者
@@ -789,7 +956,7 @@ export default function App() {
                   </button>
                 ))}
               </div>
-              <div className="group-label">科室(选"随机"则由系统抽签)</div>
+              <div className="group-label">科室选择（随机会由系统抽签）</div>
               <div className="chips">
                 {['随机', ...CASE_DEPARTMENTS].map((d) => (
                   <button
@@ -803,7 +970,7 @@ export default function App() {
                 ))}
               </div>
               <button className="primary start-action" disabled={!llmEnabled || generatingAny} onClick={() => void runGenerateCase()}>
-                {generatingCase ? generationMessage || '生成中...' : llmEnabled ? '生成病例' : '需要配置 LLM key'}
+                {generatingCase ? generationMessage || '生成患者中...' : llmEnabled ? '生成 AI 患者' : '需要配置 LLM key'}
               </button>
               {generatedCase && (
                 <div className="case-preview">
@@ -833,16 +1000,16 @@ export default function App() {
                   <input value={customAge} onChange={(e) => setCustomAge(e.target.value)} disabled={generatingAny} inputMode="numeric" />
                 </label>
                 <label>
-                  人格
+                  性格
                   <textarea value={customPersonality} onChange={(e) => setCustomPersonality(e.target.value)} disabled={generatingAny} />
                 </label>
                 <label>
-                  疾病
+                  目标疾病
                   <input value={customDisease} onChange={(e) => setCustomDisease(e.target.value)} disabled={generatingAny} />
                 </label>
               </div>
               <button className="primary start-action" disabled={!llmEnabled || generatingAny} onClick={() => void runGenerateCustomCase()}>
-                {generatingCustomCase ? generationMessage || '生成中...' : llmEnabled ? '生成自定义病例' : '需要配置 LLM key'}
+                {generatingCustomCase ? generationMessage || '生成患者中...' : llmEnabled ? '生成自定义患者' : '需要配置 LLM key'}
               </button>
               {customGeneratedCase && (
                 <div className="case-preview">
@@ -858,13 +1025,11 @@ export default function App() {
 
           {startMode === 'ident' && (
             <div className="case-builder">
-              <div className="group-label">对面可能是真急症,也可能是影帝——真假各半,开局抽签,谁都不知道。</div>
+              <div className="group-label">真假病人混入候诊区，主诉不再可靠。</div>
               <div className="rule-hint">
-                本模式隐藏"病情 HP"数值:只能靠问诊矛盾、查体不符、化验结果和病程变化来判断真假。
-                随时可点患者信息栏的 📝 签发诊断书:「收治入院」继续救治,或「判定诈病」终止接诊。
-                把真病人赶出去是重大事故;被影帝骗到最后,也自有代价。
+                本模式会隐藏上帝视角 HP。你需要结合问诊矛盾、查体不符、检查结果和病程变化，判断该收治还是揭穿诈病。
               </div>
-              <div className="group-label">科室(选"随机"则由系统抽签;真假都会顶着该科的主诉出现)</div>
+              <div className="group-label">科室选择（随机会由系统抽签）</div>
               <div className="chips">
                 {['随机', ...IDENT_DEPARTMENTS].map((d) => (
                   <button
@@ -882,7 +1047,7 @@ export default function App() {
                 disabled={!llmEnabled || generatingAny}
                 onClick={() => void runStartIdent()}
               >
-                {generatingIdent ? generationMessage || '接诊准备中...' : llmEnabled ? '开始接诊' : '需要配置 LLM key'}
+                {generatingIdent ? generationMessage || '准备接诊中...' : llmEnabled ? '开始鉴别接诊' : '需要配置 LLM key'}
               </button>
             </div>
           )}
@@ -895,8 +1060,8 @@ export default function App() {
             </div>
           )}
 
-          <div className="rule-hint">每回合 2 行动点:问诊/检查/用药 1 点,手术 2 点。找出病因,正确处置。</div>
-        </div>
+          <div className="rule-hint">每回合 2 行动点：问诊、检查、用药消耗 1 点，手术消耗 2 点。行动点耗尽后按你的版本等待语音播完再结束回合。</div>
+        </main>
       </div>
     );
   }
@@ -1452,6 +1617,16 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
 
 
 

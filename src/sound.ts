@@ -90,13 +90,14 @@ class Sfx {
 
 export const sfx = new Sfx();
 // 背景音乐:独立于语音/音效的开关,按病情阶段切换曲目。
-type BgmMode = 'normal' | 'critical';
+type BgmMode = 'menu' | 'normal' | 'critical';
 
 class Bgm {
   muted = false;
   private current: HTMLAudioElement | null = null;
   private mode: BgmMode | null = null;
   private readonly tracks: Record<BgmMode, string> = {
+    menu: '/audio/title-moonlight.mp3',
     normal: '/audio/daily-vlog.mp3',
     critical: '/audio/morning-steps.mp3',
   };
@@ -116,7 +117,7 @@ class Bgm {
     this.mode = mode;
     const audio = new Audio(this.tracks[mode]);
     audio.loop = true;
-    audio.volume = mode === 'critical' ? 0.18 : 0.12;
+    audio.volume = mode === 'critical' ? 0.18 : mode === 'menu' ? 0.11 : 0.12;
     this.current = audio;
     void audio.play().catch(() => undefined);
     if (previous) {
@@ -136,4 +137,6 @@ class Bgm {
 }
 
 export const bgm = new Bgm();
+
+
 
